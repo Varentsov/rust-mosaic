@@ -1,0 +1,7 @@
+[package]
+name = "mosaic"
+version = "0.1.0"
+authors = ["Neck Varentsov <neck.varentsov@gmail.com>"]
+
+[dependencies]
+image = "0.3.11"
