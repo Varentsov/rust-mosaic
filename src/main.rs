@@ -1,10 +1,29 @@
 extern crate image;
+extern crate docopt;
+extern crate rand;
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
 use image::GenericImage;
+use docopt::Docopt;
+
+const USAGE: &'static str = "
+Mosaic.
+
+Usage:
+    ./mosaic get <path_to_image>
+    ./mosaic scan <folder>
+    ./mosaic (-h | --help)
+
+Options:
+    -h --help   Show this screen.
+";
+const W_NUMB: u32 = 10;
+const H_NUMB: u32 = 10;
+const MY_IMAGES_DIR: &'static str = "images_db";
+
 
 
 #[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
@@ -31,18 +50,11 @@ impl MyColor {
     }
 }
 
-const W_NUMB: u32 = 20;
-const H_NUMB: u32 = 20;
-const MY_IMAGES_DIR: &'static str = "images_db";
-
 fn average_color(file: &Path) -> Option<MyColor> {
     let im = match image::open(file) {
         Ok(file) => {file},
         Err(e) => {println!("cant opent image, {}", e);return None}
     };
-
-    // The dimensions method returns the images width and height
-    //println!("dimensions {:?}", im.dimensions());
 
     let size = im.dimensions();
     let wh = size.0 * size.1;
@@ -72,6 +84,7 @@ fn process_image(path: &Path, db: &mut HashMap<MyColor, Vec<PathBuf>>) {
 
     let mut imgbuf = image::ImageBuffer::new(child_size.0, child_size.1);
     let mut tmp_piece_color: MyColor;
+    let mut rand_gen = rand::thread_rng();
 
     for i in 0..hi {
         for j in 0..wi {
@@ -84,11 +97,9 @@ fn process_image(path: &Path, db: &mut HashMap<MyColor, Vec<PathBuf>>) {
             let nearest_img: MyColor = nearest_color(&tmp_piece_color, db);
             {
                 let image_from = db.get(&nearest_img).unwrap();
-
-                //imgbuf.put_pixel(j*wi,i*hi, image::Rgb([tmp_piece_color.r, tmp_piece_color.g, tmp_piece_color.b]));
-                imgbuf.copy_from(&image::open(&image_from[0]).unwrap(), j*W_NUMB, i*H_NUMB);
+                let index: usize = rand::sample(&mut rand_gen, 0..image_from.len(), 1)[0];
+                imgbuf.copy_from(&image::open(&image_from[index]).unwrap(), j*W_NUMB, i*H_NUMB);
             }
-            //db.remove(&nearest_img);
         }
     }
 
@@ -96,14 +107,7 @@ fn process_image(path: &Path, db: &mut HashMap<MyColor, Vec<PathBuf>>) {
     let _ = image::ImageRgba8(imgbuf).save(fout, image::PNG);
 }
 
-fn create_db(directory: &Path) ->  Option<HashMap<MyColor, Vec<PathBuf>>> {
-    match fs::metadata(MY_IMAGES_DIR) {
-        Ok(_) => {println!("folder already exist")},
-        Err(_) => {fs::create_dir(MY_IMAGES_DIR).unwrap();println!("folder created");}
-    };
-
-    collect_images(directory);
-
+fn create_db() ->  Option<HashMap<MyColor, Vec<PathBuf>>> {
     let mut db: HashMap<MyColor, Vec<PathBuf>> = HashMap::new();
 
     for entry in fs::read_dir(MY_IMAGES_DIR).unwrap() {
@@ -112,7 +116,7 @@ fn create_db(directory: &Path) ->  Option<HashMap<MyColor, Vec<PathBuf>>> {
             Some(avg_color) => {
                         if db.contains_key(&avg_color) {
                             let mut key = db.get_mut(&avg_color).unwrap();
-                            println!("picture with the same color");
+                            //println!("picture with the same color");
                             key.push(entry.path());
                         }
                         else {
@@ -123,9 +127,8 @@ fn create_db(directory: &Path) ->  Option<HashMap<MyColor, Vec<PathBuf>>> {
         };
     }
 
-    //println!("{:?}", db);
     match db.capacity() {
-        0 => {println!("No images given");None},
+        0 => {println!("There are no images in db. You need to scan folder with images"); println!("{}", USAGE); panic!();},
         _ => Some(db)
     }
 }
@@ -150,9 +153,9 @@ fn collect_images(directory: &Path) {
 
                                             let imgbuf = img.resize_exact(W_NUMB, H_NUMB, image::FilterType::Lanczos3);
                                             let _ = imgbuf.save(fout, image::JPEG);
-                                            println!("{:?}, moved to db folder", entry.path());
+                                            println!("{}, moved to db folder", entry.path().to_str().unwrap());
                                             },
-                            Err(e) => {println!("fail open image, {}", e)},
+                            Err(e) => {println!("{}, fail open image: {}", entry.path().to_str().unwrap(), e)},
                             };
                         }
                 };
@@ -178,10 +181,29 @@ fn nearest_color(color: &MyColor, db: &mut HashMap<MyColor, Vec<PathBuf>>) -> My
 }
 
 fn main() {
-    //average_color(&file);
-    let img_folder = Path::new("/home/nikon/Изображения/");
-    let mut db: HashMap<MyColor, Vec<PathBuf>> = create_db(&img_folder).unwrap();
+    let args = Docopt::new(USAGE)
+                      .and_then(|dopt| dopt.parse())
+                      .unwrap_or_else(|e| e.exit());
 
-    let file = Path::new("/home/nikon/Изображения/Bankoboev.Ru_siberian_huskies_sibirskie_haski.jpg");
-    process_image(&file, &mut db);
+    match fs::metadata(MY_IMAGES_DIR) {
+        Ok(_) => {},
+        Err(_) => {fs::create_dir(MY_IMAGES_DIR).unwrap();println!("Folder created: {}", MY_IMAGES_DIR);}
+    };
+
+    if args.get_bool("scan") {
+        let img_folder = Path::new(args.get_str("<folder>"));
+        collect_images(&img_folder);
+        return;
+    }
+
+    let file_path = Path::new(args.get_str("<path_to_image>"));
+    match fs::metadata(&file_path) {
+        Ok(_) => {},
+        Err(_) => {println!("File that you gave does not exist"); return},
+    };
+
+    let mut db: HashMap<MyColor, Vec<PathBuf>> = create_db().unwrap();
+
+    process_image(&file_path, &mut db);
+    println!("Allright. New image was successfully created.");
 }
