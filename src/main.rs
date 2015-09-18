@@ -1,6 +1,8 @@
 extern crate image;
 extern crate docopt;
 extern crate rand;
+extern crate rustc_serialize;
+extern crate cbor;
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -8,9 +10,11 @@ use std::collections::HashMap;
 use std::thread;
 use std::sync::Arc;
 use std::sync::mpsc;
+use std::io::{Write, BufReader};
 
 use image::GenericImage;
 use docopt::Docopt;
+use cbor::{Decoder, Encoder};
 
 const USAGE: &'static str = "
 Mosaic.
@@ -28,7 +32,7 @@ const W_NUMB: u32 = 10;
 const H_NUMB: u32 = 10;
 const MY_IMAGES_DIR: &'static str = "images_db";
 
-#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
+#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone, RustcEncodable, RustcDecodable)]
 struct MyColor {
     r: u8,
     g: u8,
@@ -190,7 +194,7 @@ fn create_db() ->  Option<HashMap<MyColor, Vec<PathBuf>>> {
 
     match db.capacity() {
         0 => {println!("There are no images in db. You need to scan folder with images"); println!("{}", USAGE); panic!();},
-        _ => Some(db)
+        _ => {write_db_to_file(&db);Some(db)}
     }
 }
 
@@ -241,6 +245,13 @@ fn nearest_color(color: &MyColor, db: &HashMap<MyColor, Vec<PathBuf>>) -> MyColo
     *nearest
 }
 
+fn write_db_to_file(db: &HashMap<MyColor, Vec<PathBuf>>) {
+    let mut encoder = Encoder::from_memory();
+    encoder.encode(db).unwrap();
+    let mut db_out = File::create(&Path::new("db.bin")).unwrap();
+    db_out.write(&encoder.as_bytes()).unwrap();
+}
+
 fn main() {
     let args = Docopt::new(USAGE)
                       .and_then(|dopt| dopt.parse())
@@ -254,6 +265,8 @@ fn main() {
     if args.get_bool("scan") {
         let img_folder = Path::new(args.get_str("<folder>"));
         collect_images(&img_folder);
+
+        let _db: HashMap<MyColor, Vec<PathBuf>> = create_db().unwrap();
         return;
     }
 
@@ -263,7 +276,16 @@ fn main() {
         Err(_) => {println!("File that you gave does not exist"); return},
     };
 
-    let db: HashMap<MyColor, Vec<PathBuf>> = create_db().unwrap();
+    let db: HashMap<MyColor, Vec<PathBuf>>;
+
+    match File::open(&Path::new("db.bin")) {
+        Ok(file) => {
+                let reader = BufReader::new(&file);
+                let mut decoder = Decoder::from_reader(reader);
+                db = decoder.decode().collect::<Result<_, _>>().unwrap();
+            },
+        Err(_) => {db = create_db().unwrap()}
+    }
 
     if args.get_bool("--single") {
         process_image_single(&file_path, &db);
